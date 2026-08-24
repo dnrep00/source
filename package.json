@@ -1,0 +1,17 @@
+{
+  "name": "cgv-schedule-app",
+  "version": "1.0.0",
+  "description": "CGV 상영시간표 조회 및 Excel 다운로드 (Node.js 프록시 서버 포함)",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "undici": "^6.19.8"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
