@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>CGV 상영시간표 Excel 다운로드</title>
+  <title>CGV 상영시간표</title>
 
   <!-- Excel 파일 생성용 SheetJS -->
   <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
@@ -12,120 +12,167 @@
   <script src="theaters.js"></script>
 
   <style>
+    /*
+     * 색은 한 곳에만 쓴다.
+     *   #e5101d  CGV 레드 - 조회 버튼과 브랜드 점에만
+     *   그 외는 무채색. 색이 있는 것은 포스터와 잔여 임박 표시뿐.
+     */
+    :root {
+      --red: #e5101d;
+      --red-dark: #c00d18;
+      --ink: #1a1a1a;
+      --ink-2: #555;
+      --ink-3: #999;
+      --line: #ececec;
+      --line-2: #e0e0e0;
+      --bar: #1a1a1d;
+    }
+
+    * { box-sizing: border-box; }
+
     body {
-      font-family: Arial, "Noto Sans KR", sans-serif;
-      max-width: 1100px;
-      margin: 40px auto;
-      padding: 0 20px;
-      background: #f7f7f7;
-    }
-
-    h1 {
-      margin-bottom: 8px;
-    }
-
-    .description {
-      color: #666;
-      margin-bottom: 24px;
-    }
-
-    .panel {
+      font-family: "Noto Sans KR", "Malgun Gothic", Arial, sans-serif;
+      margin: 0;
       background: #fff;
-      padding: 24px;
-      border-radius: 12px;
-      margin-bottom: 24px;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+      color: var(--ink);
+      font-size: 14px;
+      -webkit-font-smoothing: antialiased;
     }
 
-    .form-row {
+    /* ---------- 상단 바 ---------- */
+    .topbar {
+      position: sticky;
+      top: 0;
+      z-index: 900;
+      background: var(--bar);
+    }
+
+    .topbar-inner {
+      max-width: 1160px;
+      margin: 0 auto;
+      padding: 11px 20px;
       display: flex;
-      gap: 16px;
+      align-items: center;
+      gap: 8px;
       flex-wrap: wrap;
-      align-items: end;
     }
 
-    .field {
-      display: flex;
-      flex-direction: column;
-      gap: 6px;
-    }
-
-    label {
-      font-weight: bold;
-    }
-
-    input, select, button {
+    .brand {
       font-size: 15px;
-      padding: 10px 12px;
+      font-weight: 500;
+      color: #fff;
+      letter-spacing: -0.2px;
+      white-space: nowrap;
+    }
+
+    .brand .dot { color: var(--red); }
+
+    .divider {
+      width: 1px;
+      height: 17px;
+      background: #3a3a3f;
+      margin: 0 2px;
+    }
+
+    .topbar-spacer { flex: 1; }
+
+    .topbar input,
+    .topbar select {
+      background: #26262b;
+      border: 1px solid #3a3a40;
+      color: #e6e6e9;
       border-radius: 6px;
-      border: 1px solid #ccc;
+      padding: 6px 9px;
+      font-size: 13px;
+      font-family: inherit;
+      max-width: 190px;
+    }
+
+    .topbar select { cursor: pointer; }
+
+    .topbar input:hover,
+    .topbar select:hover { border-color: #55555c; }
+
+    .topbar input:focus,
+    .topbar select:focus {
+      outline: none;
+      border-color: #7a7a83;
+    }
+
+    /* 날짜 입력의 달력 아이콘을 어두운 배경에 맞춤 */
+    .topbar input[type="date"]::-webkit-calendar-picker-indicator {
+      filter: invert(0.8);
+      cursor: pointer;
     }
 
     button {
-      border: none;
-      background: #e5101d;
-      color: white;
+      font-family: inherit;
+      font-size: 13px;
+      border-radius: 6px;
       cursor: pointer;
-      font-weight: bold;
+      padding: 7px 13px;
+      border: 1px solid transparent;
+      background: none;
+      color: inherit;
     }
 
-    button:hover {
-      background: #bd0d17;
+    .primary {
+      background: var(--red);
+      color: #fff;
+      font-weight: 500;
+      padding: 7px 16px;
     }
 
-    button:disabled {
-      background: #999;
+    .primary:hover { background: var(--red-dark); }
+
+    .primary:disabled {
+      background: #55555c;
       cursor: wait;
     }
 
+    .bar-button {
+      border-color: #4a4a50;
+      color: #c9c9cf;
+    }
+
+    .bar-button:hover {
+      border-color: #6d6d75;
+      color: #fff;
+    }
+
+    .filter-count {
+      display: none;
+      background: var(--red);
+      color: #fff;
+      border-radius: 9px;
+      padding: 0 6px;
+      font-size: 11px;
+      margin-left: 5px;
+    }
+
+    .filter-count.on { display: inline-block; }
+
+    /* ---------- 본문 ---------- */
+    .content {
+      max-width: 1160px;
+      margin: 0 auto;
+      padding: 0 20px 60px;
+    }
+
     #status {
-      margin-top: 16px;
-      font-weight: bold;
+      font-size: 12.5px;
+      color: var(--ink-3);
+      padding: 14px 0 4px;
+      min-height: 18px;
     }
 
-    table {
-      width: 100%;
-      border-collapse: collapse;
-      background: white;
-    }
+    #status .error { color: #c0392b; }
 
-    th, td {
-      padding: 10px;
-      border: 1px solid #ddd;
-      text-align: left;
-      vertical-align: top;
-    }
-
-    th {
-      background: #efefef;
-    }
-
-    .download-button {
-      margin-top: 16px;
-      background: #1976d2;
-    }
-
-    .download-button:hover {
-      background: #125ca5;
-    }
-
-    .warning {
-      color: #a00;
-      margin-top: 15px;
-      line-height: 1.5;
-    }
-
-    /* 영화명 클릭 링크 */
-    .movie-link {
-      color: #1976d2;
-      cursor: pointer;
-      text-decoration: underline;
-      text-underline-offset: 3px;
-      font-weight: bold;
-    }
-
-    .movie-link:hover {
-      color: #e5101d;
+    .empty-note {
+      color: var(--ink-3);
+      padding: 48px 0;
+      text-align: center;
+      font-size: 13.5px;
     }
 
     /* ---------- 영화 정보 팝업 ---------- */
@@ -147,8 +194,7 @@
       background: #fff;
       max-width: 860px;
       margin: 0 auto;
-      border-radius: 14px;
-      box-shadow: 0 12px 40px rgba(0,0,0,0.3);
+      border-radius: 12px;
       overflow: hidden;
       position: relative;
     }
@@ -157,13 +203,13 @@
       position: absolute;
       top: 12px;
       right: 12px;
-      background: rgba(0,0,0,0.55);
+      background: rgba(0,0,0,0.5);
       color: #fff;
       border: none;
       border-radius: 50%;
-      width: 34px;
-      height: 34px;
-      font-size: 20px;
+      width: 30px;
+      height: 30px;
+      font-size: 18px;
       line-height: 1;
       cursor: pointer;
       z-index: 2;
@@ -171,7 +217,7 @@
     }
 
     .modal-close:hover {
-      background: #e5101d;
+      background: var(--red);
     }
 
     .modal-body {
@@ -385,75 +431,337 @@
       padding: 9px 12px;
       margin-top: 8px;
     }
+
+    /* ---------- 조회 결과 (영화별 행) ---------- */
+    .movie-card {
+      display: flex;
+      gap: 14px;
+      padding: 14px 0;
+      border-top: 1px solid var(--line);
+      align-items: center;
+    }
+
+    .movie-card:first-child { border-top: none; }
+
+    .card-poster {
+      width: 46px;
+      height: 66px;
+      flex-shrink: 0;
+      align-self: center;
+      border-radius: 4px;
+      object-fit: cover;
+      background: #efefef;
+      cursor: pointer;
+      border: none;
+      padding: 0;
+      display: block;
+    }
+
+    .card-poster:hover { opacity: 0.8; }
+
+    .card-poster-empty {
+      width: 46px;
+      height: 66px;
+      flex-shrink: 0;
+      align-self: center;
+      border-radius: 4px;
+      background: #efefef;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #bbb;
+      font-size: 10px;
+      text-align: center;
+      cursor: pointer;
+    }
+
+    .card-main { flex: 1; min-width: 0; }
+
+    .card-title {
+      display: flex;
+      align-items: center;
+      gap: 7px;
+      flex-wrap: wrap;
+      margin-bottom: 9px;
+    }
+
+    .card-title .name {
+      font-size: 15px;
+      font-weight: 500;
+      color: var(--ink);
+      cursor: pointer;
+    }
+
+    .card-title .name:hover {
+      color: var(--red);
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    /* 부가정보는 한 줄로 합쳐서 회색 작은 글씨로 */
+    .card-meta {
+      font-size: 11.5px;
+      color: var(--ink-3);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    /* 등급/타입은 무채색 아웃라인 - 색은 포스터에만 남긴다 */
+    .badge {
+      display: inline-block;
+      border: 1px solid var(--line-2);
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-size: 11px;
+      color: var(--ink-3);
+      white-space: nowrap;
+    }
+
+    .time-list {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 5px;
+    }
+
+    /*
+     * 상영시간 버튼
+     *
+     * 화면에 이미 포스터 이미지와 등급/타입 뱃지가 색을 쓰고 있어서
+     * 기본 상태는 무채색(차콜)으로 두고, 잔여 임박만 앰버로 강조한다.
+     */
+    /*
+     * 상영시간 버튼
+     *
+     * 한 줄짜리 컴팩트 형태. 상영관은 앞에 작은 회색 글씨로 붙인다.
+     * 기본은 무채색이고, 잔여 임박일 때만 레드 계열로 신호를 준다.
+     */
+    .time-chip {
+      background: #f4f4f5;
+      color: var(--ink);
+      border: 1px solid transparent;
+      border-radius: 5px;
+      padding: 5px 9px;
+      cursor: pointer;
+      font-size: 12.5px;
+      line-height: 1.4;
+      white-space: nowrap;
+      transition: background 0.12s, border-color 0.12s;
+    }
+
+    .time-chip:hover {
+      background: #fff;
+      border-color: var(--ink-3);
+    }
+
+    .time-chip .screen {
+      font-size: 10.5px;
+      color: var(--ink-3);
+      margin-right: 4px;
+    }
+
+    .time-chip .start { font-weight: 500; }
+
+    .time-chip .end {
+      color: var(--ink-3);
+      font-size: 11.5px;
+      margin-left: 4px;
+    }
+
+    /* 잔여 좌석 20% 이하 */
+    .time-chip.few {
+      background: #fdeeee;
+      color: #a32d2d;
+    }
+
+    .time-chip.few:hover {
+      background: #fff;
+      border-color: #d98a8a;
+    }
+
+    .time-chip.few .screen { color: #c0605d; }
+    .time-chip.few .end    { color: #c0605d; }
+
+    /* 매진 */
+    .time-chip.soldout {
+      background: #f7f7f7;
+      color: #bbb;
+    }
+
+    .time-chip.soldout:hover {
+      background: #f7f7f7;
+      border-color: var(--line-2);
+    }
+
+    .time-chip.soldout .screen,
+    .time-chip.soldout .end { color: #c9c9c9; }
+
+    /* 상영회차 상세 툴팁 */
+    .session-tip {
+      display: none;
+      position: fixed;
+      z-index: 1200;
+      background: rgba(28,28,30,0.96);
+      color: #fff;
+      border-radius: 8px;
+      padding: 11px 13px;
+      font-size: 12.5px;
+      line-height: 1.65;
+      max-width: 300px;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.3);
+      pointer-events: none;
+    }
+
+    .session-tip.show { display: block; }
+
+    .session-tip .tip-title {
+      font-weight: bold;
+      font-size: 13.5px;
+      margin-bottom: 6px;
+      padding-bottom: 6px;
+      border-bottom: 1px solid rgba(255,255,255,0.2);
+    }
+
+    .session-tip b {
+      display: inline-block;
+      min-width: 62px;
+      color: #9fd8f0;
+      font-weight: normal;
+    }
+
+    /* 필터 팝업 */
+    .filter-modal { max-width: 560px; }
+
+    .filter-group {
+      border: 1px solid #e5e5e5;
+      border-radius: 8px;
+      padding: 12px 14px;
+      margin-bottom: 10px;
+    }
+
+    .filter-group h4 {
+      margin: 0 0 8px;
+      font-size: 13px;
+      color: #777;
+    }
+
+    .filter-group label {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      margin: 0 14px 6px 0;
+      font-weight: normal;
+      font-size: 14px;
+      cursor: pointer;
+    }
+
+    .filter-group input { width: 15px; height: 15px; }
+
+    .filter-actions {
+      display: flex;
+      gap: 8px;
+      justify-content: flex-end;
+      margin-top: 16px;
+    }
+
+    .filter-actions button {
+      border-color: var(--line-2);
+      color: var(--ink-2);
+      padding: 7px 14px;
+    }
+
+    .filter-actions button:hover {
+      border-color: var(--ink-3);
+      color: var(--ink);
+    }
+
+    .filter-actions .primary {
+      border-color: var(--red);
+      color: #fff;
+    }
+
+    .filter-actions .primary:hover {
+      border-color: var(--red-dark);
+      color: #fff;
+    }
   </style>
 </head>
 
 <body>
 
-<h1>CGV 상영시간표 Excel 다운로드</h1>
+<!-- 조회 조건을 한 줄로 접은 상단 바 -->
+<header class="topbar">
 
-<div class="description">
-  날짜와 CGV 극장을 선택하면 상영시간표를 조회하여 Excel 파일로 다운로드합니다.
-</div>
+  <div class="topbar-inner">
 
-<div class="panel">
+    <span class="brand">CGV<span class="dot">.</span> 상영시간표</span>
 
-  <div class="form-row">
+    <span class="divider"></span>
 
-    <div class="field">
-      <label for="date">날짜</label>
-      <input type="date" id="date" />
-    </div>
+    <input type="date" id="date" aria-label="날짜" />
 
-    <div class="field">
-      <label for="region">지역</label>
+    <!-- 지역/극장 목록은 theaters.js 에서 자동 생성 -->
+    <select id="region" aria-label="지역" onchange="onRegionChange()"></select>
+    <select id="theater" aria-label="극장"></select>
 
-      <!-- 지역 목록은 theaters.js 에서 자동 생성 -->
-      <select id="region" onchange="onRegionChange()"></select>
-    </div>
+    <button id="searchBtn" class="primary" onclick="searchSchedule()">조회</button>
 
-    <div class="field">
-      <label for="theater">극장</label>
+    <span class="topbar-spacer"></span>
 
-      <!-- 선택된 지역의 극장 목록이 자동 생성됨 -->
-      <select id="theater"></select>
-    </div>
+    <button
+      id="filterBtn"
+      class="bar-button"
+      onclick="openFilterModal()"
+      style="display:none;"
+    >필터<span id="filterCount" class="filter-count"></span></button>
 
-    <div class="field">
-      <button id="searchBtn" onclick="searchSchedule()">
-        상영시간표 조회
-      </button>
-    </div>
+    <button
+      id="downloadBtn"
+      class="bar-button"
+      onclick="downloadExcel()"
+      style="display:none;"
+    >Excel</button>
 
   </div>
+
+</header>
+
+
+<main class="content">
 
   <div id="status"></div>
 
-  <div class="warning">
-    ※ 이 페이지는 Node.js 서버(server.js)를 통해 CGV 데이터를 조회합니다.
-    서버가 실행 중이어야 정상 조회됩니다. (터미널에서 <code>npm start</code>)
+  <div id="result" class="empty-note">
+    날짜와 극장을 선택하고 조회를 누르세요.
   </div>
 
-</div>
+</main>
 
 
-<div class="panel">
+<!-- 상영회차 상세 툴팁 (마우스 오버 시 표시) -->
+<div id="sessionTip" class="session-tip"></div>
 
-  <h2>조회 결과</h2>
 
-  <div id="result">
-    조회된 데이터가 없습니다.
+<!-- 필터 설정 팝업 -->
+<div
+  class="modal-backdrop"
+  id="filterModal"
+  onclick="onFilterBackdropClick(event)"
+>
+  <div class="modal filter-modal">
+    <button class="modal-close" onclick="closeFilterModal()">&times;</button>
+
+    <div class="modal-body">
+      <h2 style="margin-top:0;">필터 설정</h2>
+      <div id="filterBody"></div>
+
+      <div class="filter-actions">
+        <button onclick="setAllFilters(true)">전체 선택</button>
+        <button onclick="setAllFilters(false)">전체 해제</button>
+        <button class="primary" onclick="closeFilterModal()">닫기</button>
+      </div>
+    </div>
   </div>
-
-  <button
-    id="downloadBtn"
-    class="download-button"
-    onclick="downloadExcel()"
-    style="display:none;"
-  >
-    Excel 다운로드
-  </button>
-
 </div>
 
 
@@ -472,8 +780,13 @@
 
 <script>
 
-let currentRows = [];
+let currentRows = [];        // 화면에 그려진 순서와 동일한 엑셀용 행
 let currentSiteName = "";
+
+let allSessions = [];        // 조회된 전체 상영회차 (필터 적용 전)
+let visibleSessions = [];    // 화면에 표시 중인 회차 (툴팁 참조용)
+let filterOptions = {};      // { 필드: [선택 가능한 값들] }
+let filterState = {};        // { 필드: Set(선택된 값들) }
 
 
 /*
@@ -755,762 +1068,3 @@ async function searchSchedule() {
       );
 
     }
-
-
-    const data =
-      json.data || [];
-
-
-    /*
-     * 필요한 컬럼만 추출
-     */
-    currentRows =
-      data.map(item => {
-
-        let movieName =
-          item.expoProdNm ||
-          item.prodNm ||
-          item.movNm ||
-          "";
-
-
-        /*
-         * SCREENX 등은
-         * 영화명에 이미 표시되는 경우가 있지만,
-         * 중복 표시 방지를 위해 CGV의
-         * expoProdNm을 우선 사용.
-         */
-
-
-        const start =
-          formatStartTime(
-            item.scnsrtTm
-          );
-
-        const end =
-          formatEndTime(
-            item.scnendTm
-          );
-
-
-        return {
-
-          "영화명":
-            movieName,
-
-          "날짜":
-            formatDate(
-              item.scnYmd
-            ),
-
-          "상영관":
-            item.scnsNm || "",
-
-          "상영시간 (시작~끝)":
-            start + " ~ " + end
-
-        };
-
-      });
-
-
-    /*
-     * 영화명 → 날짜 → 상영관 → 시작시간 순 정렬
-     */
-    currentRows.sort(
-      (a, b) => {
-
-        const movieCompare =
-          a["영화명"].localeCompare(
-            b["영화명"],
-            "ko"
-          );
-
-        if (movieCompare !== 0) {
-          return movieCompare;
-        }
-
-
-        const dateCompare =
-          a["날짜"].localeCompare(
-            b["날짜"]
-          );
-
-        if (dateCompare !== 0) {
-          return dateCompare;
-        }
-
-
-        const theaterCompare =
-          a["상영관"].localeCompare(
-            b["상영관"],
-            "ko",
-            {
-              numeric: true
-            }
-          );
-
-        if (theaterCompare !== 0) {
-          return theaterCompare;
-        }
-
-
-        return (
-          a["상영시간 (시작~끝)"]
-            .localeCompare(
-              b["상영시간 (시작~끝)"]
-            )
-        );
-
-      }
-    );
-
-
-    renderTable(currentRows);
-
-
-    statusElement.textContent =
-      `${currentSiteName} / ${dateElement.value} / ${currentRows.length}개 회차 조회 완료`;
-
-
-    document
-      .getElementById("downloadBtn")
-      .style.display = "inline-block";
-
-
-  } catch (error) {
-
-    console.error(error);
-
-    statusElement.innerHTML =
-      `
-      <span style="color:red;">
-        조회 실패: ${escapeHtml(error.message)}
-      </span>
-      <br><br>
-      로컬 서버(node server.js)가 실행 중인지 확인해주세요.
-      `;
-
-  } finally {
-
-    searchButton.disabled = false;
-
-  }
-
-}
-
-
-/*
- * HTML 테이블 출력
- */
-function renderTable(rows) {
-
-  const result =
-    document.getElementById("result");
-
-
-  if (!rows.length) {
-
-    result.innerHTML =
-      "상영 일정이 없습니다.";
-
-    return;
-  }
-
-
-  let html = `
-    <table>
-      <thead>
-        <tr>
-          <th>영화명</th>
-          <th>날짜</th>
-          <th>상영관</th>
-          <th>상영시간 (시작~끝)</th>
-        </tr>
-      </thead>
-
-      <tbody>
-  `;
-
-
-  for (const row of rows) {
-
-    html += `
-      <tr>
-
-        <td>
-          <span
-            class="movie-link"
-            onclick="openMovieModal('${escapeAttr(row["영화명"])}')"
-            title="클릭하면 영화 상세정보를 봅니다"
-          >${escapeHtml(row["영화명"])}</span>
-        </td>
-
-        <td>
-          ${escapeHtml(row["날짜"])}
-        </td>
-
-        <td>
-          ${escapeHtml(row["상영관"])}
-        </td>
-
-        <td>
-          ${escapeHtml(
-            row["상영시간 (시작~끝)"]
-          )}
-        </td>
-
-      </tr>
-    `;
-
-  }
-
-
-  html += `
-      </tbody>
-    </table>
-  `;
-
-
-  result.innerHTML = html;
-
-}
-
-
-/*
- * Excel 다운로드
- */
-function downloadExcel() {
-
-  if (!currentRows.length) {
-
-    alert(
-      "먼저 상영시간표를 조회하세요."
-    );
-
-    return;
-  }
-
-
-  /*
-   * JSON → worksheet
-   */
-  const worksheet =
-    XLSX.utils.json_to_sheet(
-      currentRows,
-      {
-        header: [
-          "영화명",
-          "날짜",
-          "상영관",
-          "상영시간 (시작~끝)"
-        ]
-      }
-    );
-
-
-  /*
-   * 컬럼 폭 설정
-   */
-  worksheet["!cols"] = [
-
-    {
-      wch: 38
-    },
-
-    {
-      wch: 14
-    },
-
-    {
-      wch: 30
-    },
-
-    {
-      wch: 26
-    }
-
-  ];
-
-
-  /*
-   * 자동 필터
-   */
-  if (currentRows.length > 0) {
-
-    worksheet["!autofilter"] = {
-
-      ref:
-        `A1:D${currentRows.length + 1}`
-
-    };
-
-  }
-
-
-  /*
-   * Workbook 생성
-   */
-  const workbook =
-    XLSX.utils.book_new();
-
-
-  XLSX.utils.book_append_sheet(
-    workbook,
-    worksheet,
-    "상영시간표"
-  );
-
-
-  /*
-   * 파일명
-   */
-  const selectedDate =
-    document
-      .getElementById("date")
-      .value
-      .replaceAll("-", "");
-
-
-  const safeSiteName =
-    currentSiteName
-      .replace(
-        /[\\/:*?"<>|]/g,
-        "_"
-      );
-
-
-  const fileName =
-    `${safeSiteName}_${selectedDate}_상영시간표.xlsx`;
-
-
-  /*
-   * 다운로드
-   */
-  XLSX.writeFile(
-    workbook,
-    fileName
-  );
-
-}
-
-
-/* ==================================================================
- * 영화 상세정보 팝업
- *
- *   TMDB  - 포스터 / 감독 / 출연진 / 줄거리 / 개봉일 / 러닝타임
- *   OMDb  - IMDb 평점 / 전문가 평점(Metacritic, Rotten Tomatoes)
- *   네이버 - 실관람객(관객) 평점 / 관객 한줄평
- * ================================================================== */
-
-function openMovieModal(title) {
-
-  const modal = document.getElementById("movieModal");
-  const body = document.getElementById("movieModalBody");
-
-  modal.classList.add("open");
-  document.body.style.overflow = "hidden";
-
-  body.innerHTML = `
-    <div class="modal-loading">
-      <h3>${escapeHtml(title)}</h3>
-      <p>영화 정보를 불러오는 중입니다...</p>
-    </div>
-  `;
-
-  fetch("/api/movie?title=" + encodeURIComponent(title))
-    .then(response => response.json().then(json => {
-
-      if (!response.ok) {
-        throw new Error(json.error || ("HTTP " + response.status));
-      }
-
-      return json;
-
-    }))
-    .then(data => {
-      body.innerHTML = renderMovieDetail(title, data);
-    })
-    .catch(error => {
-      body.innerHTML = `
-        <div class="modal-loading">
-          <h3>${escapeHtml(title)}</h3>
-          <p style="color:#a00;">
-            정보를 불러오지 못했습니다: ${escapeHtml(error.message)}
-          </p>
-        </div>
-      `;
-    });
-
-}
-
-
-function closeMovieModal() {
-
-  document.getElementById("movieModal").classList.remove("open");
-  document.body.style.overflow = "";
-
-}
-
-
-function onBackdropClick(event) {
-
-  // 바깥 여백을 클릭한 경우에만 닫는다.
-  if (event.target.id === "movieModal") {
-    closeMovieModal();
-  }
-
-}
-
-
-/*
- * 팝업 본문 HTML 생성
- */
-function renderMovieDetail(rawTitle, data) {
-
-  const tmdb = data.tmdb || {};
-  const omdb = data.omdb || {};
-  const naver = data.naver || {};
-
-  const heading = tmdb.available ? tmdb.title : rawTitle;
-
-  /* ----- 기본 정보 ----- */
-  let metaHtml = "";
-
-  if (tmdb.available) {
-
-    const runtime = tmdb.runtime
-      ? `${Math.floor(tmdb.runtime / 60)}시간 ${tmdb.runtime % 60}분 (${tmdb.runtime}분)`
-      : "-";
-
-    metaHtml = `
-      ${tmdb.originalTitle && tmdb.originalTitle !== tmdb.title
-        ? `<div class="modal-original">${escapeHtml(tmdb.originalTitle)}</div>`
-        : ""}
-
-      ${tmdb.genres.length
-        ? `<div class="meta-line">${tmdb.genres
-            .map(g => `<span class="genre-tag">${escapeHtml(g)}</span>`)
-            .join("")}</div>`
-        : ""}
-
-      <div class="meta-line">
-        <b>감독</b> ${tmdb.directors.length ? escapeHtml(tmdb.directors.join(", ")) : "-"}
-      </div>
-      <div class="meta-line"><b>개봉</b> ${escapeHtml(tmdb.releaseDate || "-")}</div>
-      <div class="meta-line"><b>러닝타임</b> ${runtime}</div>
-      ${tmdb.tagline
-        ? `<div class="meta-line" style="color:#777;font-style:italic;">
-             "${escapeHtml(tmdb.tagline)}"
-           </div>`
-        : ""}
-    `;
-
-  } else {
-
-    metaHtml = `
-      <div class="source-fail">
-        기본 정보를 가져오지 못했습니다.
-        ${escapeHtml(tmdb.reason || "")}
-      </div>
-    `;
-
-  }
-
-  const posterHtml = tmdb.poster
-    ? `<img class="modal-poster" src="${escapeAttr(tmdb.poster)}"
-            alt="${escapeAttr(heading)} 포스터" />`
-    : `<div class="modal-poster" style="height:280px;display:flex;
-            align-items:center;justify-content:center;color:#bbb;">
-         포스터 없음
-       </div>`;
-
-  /* ----- 평점 카드 ----- */
-  const cards = [];
-
-  if (naver.available && naver.audienceScore) {
-    cards.push(`
-      <div class="rating-card audience">
-        <div class="label">
-          ${escapeHtml(naver.audienceScoreType || "관객")} 평점 (네이버)
-        </div>
-        <div class="score">${escapeHtml(naver.audienceScore)}</div>
-        <div class="sub">
-          10점 만점${naver.participants ? " · " + escapeHtml(naver.participants) + "명" : ""}
-        </div>
-      </div>
-    `);
-  }
-
-  if (naver.available && naver.criticScore) {
-    cards.push(`
-      <div class="rating-card critic">
-        <div class="label">전문가 평점 (네이버)</div>
-        <div class="score">${escapeHtml(naver.criticScore)}</div>
-        <div class="sub">10점 만점 · 평론가 ${naver.criticCount}명</div>
-      </div>
-    `);
-  }
-
-  if (omdb.available && omdb.imdbRating) {
-    cards.push(`
-      <div class="rating-card imdb">
-        <div class="label">IMDb</div>
-        <div class="score">${escapeHtml(omdb.imdbRating)}</div>
-        <div class="sub">
-          10점 만점${omdb.imdbVotes ? " · " + escapeHtml(omdb.imdbVotes) : ""}
-        </div>
-      </div>
-    `);
-  }
-
-  if (omdb.available && omdb.metascore) {
-    cards.push(`
-      <div class="rating-card meta">
-        <div class="label">전문가 (Metacritic)</div>
-        <div class="score">${escapeHtml(omdb.metascore)}</div>
-        <div class="sub">100점 만점</div>
-      </div>
-    `);
-  }
-
-  if (omdb.available && omdb.rottenTomatoes) {
-    cards.push(`
-      <div class="rating-card tomato">
-        <div class="label">전문가 (Rotten Tomatoes)</div>
-        <div class="score">${escapeHtml(omdb.rottenTomatoes)}</div>
-        <div class="sub">토마토미터</div>
-      </div>
-    `);
-  }
-
-  if (tmdb.available && tmdb.voteAverage) {
-    cards.push(`
-      <div class="rating-card">
-        <div class="label">TMDB</div>
-        <div class="score">${Number(tmdb.voteAverage).toFixed(1)}</div>
-        <div class="sub">10점 만점 · ${Number(tmdb.voteCount || 0).toLocaleString()}명</div>
-      </div>
-    `);
-  }
-
-  const ratingHtml = cards.length
-    ? `<div class="rating-row">${cards.join("")}</div>`
-    : `<div class="source-fail">평점 정보를 찾지 못했습니다.</div>`;
-
-  const genderHtml =
-    naver.available && naver.maleScore
-      ? `<div class="meta-line" style="color:#777;">
-           네이버 성별 평점 · 남 ${escapeHtml(naver.maleScore)}
-           / 여 ${escapeHtml(naver.femaleScore)}
-         </div>`
-      : "";
-
-  /* ----- 출연진 ----- */
-  const castHtml =
-    tmdb.available && tmdb.cast.length
-      ? `<h3 class="section-title">출연진</h3>
-         <div class="cast-list">
-           ${tmdb.cast.map(person => `
-             <div class="cast-item">
-               ${person.profile
-                 ? `<img src="${escapeAttr(person.profile)}"
-                         alt="${escapeAttr(person.name)}" />`
-                 : `<div class="no-photo">사진 없음</div>`}
-               <div class="nm">${escapeHtml(person.name)}</div>
-               <div class="ch">${escapeHtml(person.character)}</div>
-             </div>
-           `).join("")}
-         </div>`
-      : "";
-
-  /* ----- 줄거리 ----- */
-  const overviewHtml =
-    tmdb.available && tmdb.overview
-      ? `<h3 class="section-title">줄거리</h3>
-         <div class="overview">${escapeHtml(tmdb.overview)}</div>`
-      : "";
-
-  /* ----- 전문가(평론가) 의견 ----- */
-  const criticHtml =
-    naver.available && naver.critics && naver.critics.length
-      ? `<h3 class="section-title">전문가 평 (네이버 평론가)</h3>
-         ${naver.critics.map(critic => `
-           <div class="review critic-review">
-             <span class="score-badge critic-badge">${escapeHtml(critic.score)}</span>
-             ${escapeHtml(critic.comment)}
-             <div class="who">
-               ${escapeHtml(critic.name)} · ${escapeHtml(critic.date)}
-             </div>
-           </div>
-         `).join("")}`
-      : "";
-
-  /* ----- 관객 한줄평 ----- */
-  const reviewHtml =
-    naver.available && naver.reviews.length
-      ? `<h3 class="section-title">
-           ${escapeHtml(naver.audienceScoreType || "관객")} 한줄평 (네이버)
-         </h3>
-         ${naver.reviews.map(review => `
-           <div class="review">
-             <span class="score-badge">${escapeHtml(review.score)}</span>
-             ${escapeHtml(review.content)}
-             <div class="who">
-               ${escapeHtml(review.author)}
-               ${review.date ? " · " + escapeHtml(review.date) : ""}
-               · 공감 ${escapeHtml(review.likes)}
-             </div>
-           </div>
-         `).join("")}`
-      : "";
-
-  /* ----- 안내 문구 ----- */
-  const notes = [];
-
-  if (!omdb.available) {
-    notes.push("IMDb·해외 평점: " + escapeHtml(omdb.reason || "조회 실패"));
-  } else if (!omdb.metascore && !omdb.rottenTomatoes) {
-    notes.push("이 영화는 해외 전문가 평점(Metacritic·Rotten Tomatoes) 데이터가 없습니다.");
-  }
-
-  if (!naver.available) {
-    notes.push("네이버 평점: " + escapeHtml(naver.reason || "조회 실패"));
-  } else if (!naver.critics || !naver.critics.length) {
-    notes.push("이 영화는 네이버 평론가 평점이 등록되어 있지 않습니다.");
-  }
-
-  const linkParts = [];
-
-  if (omdb.available && omdb.imdbUrl) {
-    linkParts.push(`<a href="${escapeAttr(omdb.imdbUrl)}" target="_blank"
-                       rel="noopener noreferrer">IMDb에서 보기</a>`);
-  }
-
-  if (naver.available && naver.searchUrl) {
-    linkParts.push(`<a href="${escapeAttr(naver.searchUrl)}" target="_blank"
-                       rel="noopener noreferrer">네이버에서 보기</a>`);
-  }
-
-  return `
-    <div class="modal-body">
-
-      <div class="modal-head">
-        ${posterHtml}
-        <div class="modal-meta">
-          <h2>${escapeHtml(heading)}</h2>
-          ${metaHtml}
-          ${genderHtml}
-        </div>
-      </div>
-
-      ${ratingHtml}
-      ${overviewHtml}
-      ${castHtml}
-      ${criticHtml}
-      ${reviewHtml}
-
-      <div class="modal-note">
-        ${linkParts.length ? linkParts.join(" · ") + "<br>" : ""}
-        출처: TMDB(기본정보) · 네이버(관객·전문가 평점) ·
-        OMDb(IMDb·Metacritic·Rotten Tomatoes)
-        ${notes.length ? "<br>" + notes.join("<br>") : ""}
-        ${data.query && data.query.raw !== data.query.cleaned
-          ? `<br>검색어: "${escapeHtml(data.query.raw)}" → "${escapeHtml(data.query.cleaned)}"`
-          : ""}
-      </div>
-
-    </div>
-  `;
-
-}
-
-
-/*
- * ESC 키로 팝업 닫기
- */
-window.addEventListener("keydown", event => {
-
-  if (event.key === "Escape") {
-    closeMovieModal();
-  }
-
-});
-
-
-/*
- * HTML 속성값 escape (작은따옴표 포함)
- */
-function escapeAttr(value) {
-
-  return escapeHtml(value);
-
-}
-
-
-/*
- * HTML escape
- */
-function escapeHtml(value) {
-
-  return String(value)
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-
-}
-
-
-/*
- * 초기화
- *
- *  - 지역/극장 목록 생성 (기본값: 경기 - CGV 오리)
- *  - 오늘 날짜 기본 설정
- */
-window.addEventListener(
-  "DOMContentLoaded",
-  () => {
-
-    initRegionSelect();
-
-    document
-      .getElementById("region")
-      .value = CGV_DEFAULT_REGION;
-
-    fillTheaterSelect(
-      CGV_DEFAULT_REGION,
-      CGV_DEFAULT_SITE_NO
-    );
-
-
-    const today =
-      new Date();
-
-    const yyyy =
-      today.getFullYear();
-
-    const mm =
-      String(
-        today.getMonth() + 1
-      ).padStart(2, "0");
-
-    const dd =
-      String(
-        today.getDate()
-      ).padStart(2, "0");
-
-
-    document
-      .getElementById("date")
-      .value =
-        `${yyyy}-${mm}-${dd}`;
-
-  }
-);
-
-</script>
-
-</body>
-</html>
