@@ -1,0 +1,1142 @@
+
+    const data =
+      json.data || [];
+
+
+    /*
+     * CGV 응답을 화면에서 쓰기 좋은 형태로 변환한다.
+     */
+    allSessions = data.map(item => toSession(item));
+
+    // 조회 결과로 필터 항목을 새로 구성 (처음에는 전부 선택)
+    buildFilterState(allSessions);
+
+    applyFilter();
+
+
+    statusElement.textContent =
+      `${currentSiteName} / ${dateElement.value} / ${allSessions.length}개 회차 조회 완료`;
+
+
+    document.getElementById("downloadBtn").style.display = "inline-block";
+    document.getElementById("filterBtn").style.display =
+      allSessions.length ? "inline-block" : "none";
+
+
+  } catch (error) {
+
+    console.error(error);
+
+    statusElement.innerHTML =
+      `<span class="error">조회 실패: ${escapeHtml(error.message)}` +
+      ` — 로컬 서버(npm start)가 실행 중인지 확인해주세요.</span>`;
+
+  } finally {
+
+    searchButton.disabled = false;
+
+  }
+
+}
+
+
+/* ==================================================================
+ * 상영회차 데이터 변환
+ * ================================================================== */
+
+/*
+ * CGV 응답 한 건을 화면에서 쓸 형태로 변환한다.
+ *
+ * 없는 필드는 빈 값으로 두고, 화면에서는 값이 있을 때만 표시한다.
+ */
+function toSession(item) {
+
+  const movieName =
+    item.expoProdNm || item.prodNm || item.movNm || "";
+
+  return {
+    movieName,
+    engName: item.engProdNm || item.movEnm || "",
+    movieNo: item.movNo || "",
+    poster: buildPosterUrl(item),
+
+    screen: item.expoScnsNm || item.scnsNm || "",
+    screenShort: shortenScreenName(item.expoScnsNm || item.scnsNm || ""),
+    theaterName: item.siteNm || "",
+
+    date: formatDate(item.scnYmd),
+    startRaw: item.scnsrtTm || "",
+    endRaw: item.scnendTm || "",
+    start: formatStartTime(item.scnsrtTm),
+    end: formatEndTime(item.scnendTm),
+    realStart: item.rlMovStartTm ? formatStartTime(item.rlMovStartTm) : "",
+    saleEnd: item.salEndTm ? formatStartTime(item.salEndTm) : "",
+
+    // 필터 항목
+    rating: item.cratgClsNm || "",         // 관람등급
+    timeZone: timeBand(item.scnsrtTm),     // 오전 / 오후 / 18시 이후 / 심야
+    type: item.movkndDsplNm || "",         // 상영타입 (2D/SCREENX 2D)
+    screenGrade: item.sascnsGradNm || "",  // 상영등급
+    screenKind: item.tcscnsGradNm || "",   // 상영관 종류
+
+    seatTotal: Number(item.cpSeatCnt || item.stcnt || 0),
+    seatLeft: Number(item.frSeatCnt || 0)
+  };
+
+}
+
+
+/*
+ * CGV 포스터 URL 조립
+ *
+ * physcFilePathnm 예: "030001/30001323/30001323_185.jpg"
+ * 목록에서는 조금 더 큰 320 이미지를 쓴다.
+ */
+function buildPosterUrl(item) {
+
+  if (item.physcFilePathnm) {
+    return "https://cdn.cgv.co.kr/cgvpomsfilm/Movie/Thumbnail/Poster/" +
+      String(item.physcFilePathnm).replace("_185.", "_320.");
+  }
+
+  // 경로가 없으면 영화 코드로 직접 조립한다.
+  const no = String(item.movNo || "");
+
+  if (!/^\d+$/.test(no)) {
+    return "";
+  }
+
+  const folder = String(Math.floor(Number(no) / 1000)).padStart(6, "0");
+
+  return "https://cdn.cgv.co.kr/cgvpomsfilm/Movie/Thumbnail/Poster/" +
+    folder + "/" + no + "/" + no + "_320.jpg";
+
+}
+
+
+/*
+ * 시간대 구분 (CGV 상영시간표와 동일한 기준)
+ *
+ *   오전       ~ 11:59
+ *   오후       12:00 ~ 17:59
+ *   18시 이후  18:00 ~ 23:59
+ *   심야       24:00 이후 (자정을 넘겨 시작하는 회차)
+ *
+ * CGV는 자정 이후 상영을 2430, 2605처럼 24시 이상으로 표기하므로
+ * 시(hour)가 24 이상이면 심야로 본다.
+ */
+const TIME_BANDS = ["오전", "오후", "18시 이후", "심야"];
+
+function timeBand(startTime) {
+
+  const hour = Number(String(startTime || "").slice(0, 2));
+
+  if (!Number.isFinite(hour)) {
+    return "";
+  }
+
+  if (hour >= 24) return "심야";
+  if (hour >= 18) return "18시 이후";
+  if (hour >= 12) return "오후";
+
+  return "오전";
+
+}
+
+
+/*
+ * "1관 (Laser)" → "1관"   (시간 버튼에 짧게 표시하기 위함)
+ */
+function shortenScreenName(name) {
+
+  const match = String(name).match(/^\s*([^(（]+)/);
+
+  return (match ? match[1] : String(name)).trim() || String(name);
+
+}
+
+
+/* ==================================================================
+ * 필터
+ * ================================================================== */
+
+const FILTER_GROUPS = [
+  { key: "rating",      label: "관람등급" },
+  // 시간대는 이른 시간부터 나오도록 순서를 고정한다.
+  { key: "timeZone",    label: "시간대", order: TIME_BANDS },
+  { key: "type",        label: "상영타입" },
+  { key: "screenKind",  label: "상영관 종류" },
+  { key: "screenGrade", label: "상영등급" },
+  { key: "screen",      label: "상영관" }
+];
+
+
+/*
+ * 조회 결과에 실제로 존재하는 값만으로 필터 항목을 만든다.
+ * 처음에는 모두 선택된 상태로 시작한다.
+ */
+function buildFilterState(sessions) {
+
+  filterOptions = {};
+  filterState = {};
+
+  for (const group of FILTER_GROUPS) {
+
+    const values = [...new Set(
+      sessions.map(s => s[group.key]).filter(v => v)
+    )];
+
+    if (!values.length) {
+      continue;
+    }
+
+    if (group.order) {
+      // 정해진 순서가 있는 그룹 (시간대)
+      values.sort((a, b) => group.order.indexOf(a) - group.order.indexOf(b));
+    } else {
+      values.sort((a, b) => a.localeCompare(b, "ko", { numeric: true }));
+    }
+
+    filterOptions[group.key] = values;
+    filterState[group.key] = new Set(values);
+
+  }
+
+}
+
+
+/*
+ * 필터를 적용해 화면을 다시 그린다.
+ */
+function applyFilter() {
+
+  const visible = allSessions.filter(session =>
+    Object.keys(filterState).every(key =>
+      !session[key] || filterState[key].has(session[key])
+    )
+  );
+
+  renderSchedule(visible);
+  updateFilterBadge();
+
+}
+
+
+/*
+ * 선택 해제된 항목 수를 필터 버튼에 표시한다.
+ */
+function updateFilterBadge() {
+
+  let off = 0;
+
+  for (const key of Object.keys(filterState)) {
+    off += filterOptions[key].length - filterState[key].size;
+  }
+
+  const badge = document.getElementById("filterCount");
+
+  badge.textContent = off ? String(off) : "";
+  badge.classList.toggle("on", off > 0);
+
+}
+
+
+function openFilterModal() {
+
+  const body = document.getElementById("filterBody");
+
+  body.innerHTML = FILTER_GROUPS
+    .filter(group => filterOptions[group.key])
+    .map(group => `
+      <div class="filter-group">
+        <h4>${escapeHtml(group.label)}</h4>
+        ${filterOptions[group.key].map(value => `
+          <label>
+            <input
+              type="checkbox"
+              ${filterState[group.key].has(value) ? "checked" : ""}
+              onchange="toggleFilter('${escapeAttr(group.key)}', '${escapeAttr(value)}', this.checked)"
+            />
+            ${escapeHtml(value)}
+          </label>
+        `).join("")}
+      </div>
+    `).join("");
+
+  document.getElementById("filterModal").classList.add("open");
+  document.body.style.overflow = "hidden";
+
+}
+
+
+function closeFilterModal() {
+
+  document.getElementById("filterModal").classList.remove("open");
+  document.body.style.overflow = "";
+
+}
+
+
+function onFilterBackdropClick(event) {
+
+  if (event.target.id === "filterModal") {
+    closeFilterModal();
+  }
+
+}
+
+
+function toggleFilter(key, value, checked) {
+
+  if (checked) {
+    filterState[key].add(value);
+  } else {
+    filterState[key].delete(value);
+  }
+
+  applyFilter();
+
+}
+
+
+function setAllFilters(checked) {
+
+  for (const key of Object.keys(filterState)) {
+
+    filterState[key] = checked
+      ? new Set(filterOptions[key])
+      : new Set();
+
+  }
+
+  openFilterModal();   // 체크박스 상태 다시 그리기
+  applyFilter();
+
+}
+
+
+/* ==================================================================
+ * 조회 결과 출력 (영화별 카드 + 상영시간 버튼)
+ * ================================================================== */
+
+function renderSchedule(sessions) {
+
+  const result = document.getElementById("result");
+
+  // 엑셀이 화면과 같은 순서가 되도록, 그리는 순서 그대로 담는다.
+  // visibleSessions는 같은 인덱스로 툴팁이 참조한다.
+  currentRows = [];
+  visibleSessions = [];
+
+  if (!sessions.length) {
+
+    result.innerHTML = allSessions.length
+      ? `<div class="empty-note">필터 조건에 맞는 상영 회차가 없습니다.</div>`
+      : `<div class="empty-note">상영 일정이 없습니다.</div>`;
+
+    return;
+  }
+
+  /*
+   * 영화별로 묶는다.
+   *
+   * 영화 정렬: 상영회차가 많은 순 → 같으면 영화명 가나다순
+   * 회차 정렬: 상영 시작시간순
+   */
+  const byMovie = new Map();
+
+  for (const session of sessions) {
+
+    if (!byMovie.has(session.movieName)) {
+      byMovie.set(session.movieName, []);
+    }
+
+    byMovie.get(session.movieName).push(session);
+
+  }
+
+  const movieNames = [...byMovie.keys()].sort((a, b) => {
+
+    // 1) 상영회차가 많은 영화가 위로
+    const countDiff = byMovie.get(b).length - byMovie.get(a).length;
+
+    if (countDiff !== 0) {
+      return countDiff;
+    }
+
+    // 2) 회차 수가 같으면 영화명 가나다순
+    return a.localeCompare(b, "ko");
+
+  });
+
+  let html = "";
+
+  for (const name of movieNames) {
+
+    const list = byMovie.get(name)
+      .sort((a, b) => Number(a.startRaw) - Number(b.startRaw));
+
+    const first = list[0];
+
+    // 이 영화에 걸린 상영타입 모음 (2D, SCREENX 2D ...)
+    const types = [...new Set(list.map(s => s.type).filter(v => v))];
+
+    const posterHtml = first.poster
+      ? `<img
+           class="card-poster"
+           src="${escapeAttr(first.poster)}"
+           alt="${escapeAttr(name)} 포스터"
+           onclick="openMovieModal('${escapeAttr(name)}')"
+           onerror="onPosterError(this)"
+         />`
+      : `<div class="card-poster-empty"
+              onclick="openMovieModal('${escapeAttr(name)}')">포스터 없음</div>`;
+
+    // 등급 · 상영타입 · 영문명을 한 줄로 합쳐 회색 작은 글씨로 둔다.
+    const metaParts = [];
+
+    if (first.engName) {
+      metaParts.push(escapeHtml(first.engName));
+    }
+
+    html += `
+      <div class="movie-card">
+
+        ${posterHtml}
+
+        <div class="card-main">
+
+          <div class="card-title">
+            <span class="name" onclick="openMovieModal('${escapeAttr(name)}')"
+                  title="클릭하면 영화 상세정보를 봅니다">${escapeHtml(name)}</span>
+            ${first.rating
+              ? `<span class="badge">${escapeHtml(shortenRating(first.rating))}</span>`
+              : ""}
+            ${types.map(t => `<span class="badge">${escapeHtml(t)}</span>`).join("")}
+            ${metaParts.length
+              ? `<span class="card-meta">${metaParts.join(" · ")}</span>`
+              : ""}
+          </div>
+
+          <div class="time-list">
+            ${list.map(session => {
+
+              // 화면에 그리는 순서대로 엑셀 행과 툴팁 데이터를 함께 쌓는다.
+              currentRows.push({
+                "영화명": session.movieName,
+                "날짜": session.date,
+                "상영관": session.screen,
+                "상영시간 (시작~끝)": session.start + " ~ " + session.end
+              });
+
+              visibleSessions.push(session);
+
+              const index = currentRows.length - 1;
+
+              return `
+                <button
+                  class="time-chip ${seatClass(session)}"
+                  data-session="${index}"
+                  onmouseenter="showSessionTip(event, ${index})"
+                  onmousemove="moveSessionTip(event)"
+                  onmouseleave="hideSessionTip()"
+                  onclick="openMovieModal('${escapeAttr(name)}')"
+                >
+                  <span class="screen">${escapeHtml(session.screenShort)}</span><span
+                    class="start">${escapeHtml(session.start)}</span><span
+                    class="end">~ ${escapeHtml(session.end)}</span>
+                </button>
+              `;
+
+            }).join("")}
+          </div>
+
+        </div>
+      </div>
+    `;
+
+  }
+
+  result.innerHTML = html;
+
+}
+
+
+/*
+ * 포스터를 불러오지 못하면 (CGV CDN 차단 등) 자리표시로 바꾼다.
+ * 클릭 동작은 그대로 유지한다.
+ */
+function onPosterError(image) {
+
+  const placeholder = document.createElement("div");
+
+  placeholder.className = "card-poster-empty";
+  placeholder.textContent = "포스터 없음";
+  placeholder.onclick = image.onclick;
+
+  image.replaceWith(placeholder);
+
+}
+
+
+/*
+ * 관람등급을 짧게 줄인다. ("15세이상관람가" → "15세")
+ * 전체 문구는 상영시간 버튼 툴팁에서 볼 수 있다.
+ */
+function shortenRating(rating) {
+
+  const match = String(rating).match(/(\d{2})세/);
+
+  if (match) {
+    return match[1] + "세";
+  }
+
+  if (rating.includes("전체")) {
+    return "전체";
+  }
+
+  if (rating.includes("청소년")) {
+    return "청불";
+  }
+
+  return rating;
+
+}
+
+
+/*
+ * 잔여 좌석에 따른 버튼 색
+ */
+function seatClass(session) {
+
+  if (!session.seatTotal) {
+    return "";
+  }
+
+  if (session.seatLeft <= 0) {
+    return "soldout";
+  }
+
+  return session.seatLeft / session.seatTotal <= 0.2 ? "few" : "";
+
+}
+
+
+/* ==================================================================
+ * 상영회차 상세 툴팁
+ * ================================================================== */
+
+function showSessionTip(event, index) {
+
+  const session = visibleSessions[index];
+
+  if (!session) {
+    return;
+  }
+
+  const line = (label, value) =>
+    value ? `<div><b>${label}</b> ${escapeHtml(String(value))}</div>` : "";
+
+  const seatText = session.seatTotal
+    ? `${session.seatLeft} / ${session.seatTotal}석` +
+      (session.seatLeft <= 0 ? " (매진)" : "")
+    : "";
+
+  const tip = document.getElementById("sessionTip");
+
+  tip.innerHTML = `
+    <div class="tip-title">${escapeHtml(session.movieName)}</div>
+    ${line("상영관", session.screen)}
+    ${line("상영시간", session.start + " ~ " + session.end)}
+    ${line("본편 시작", session.realStart)}
+    ${line("날짜", session.date)}
+    ${line("상영타입", session.type)}
+    ${line("관람등급", session.rating)}
+    ${line("시간대", session.timeZone)}
+    ${line("상영관 종류", session.screenKind)}
+    ${line("잔여좌석", seatText)}
+    ${line("예매마감", session.saleEnd)}
+    ${line("극장", session.theaterName)}
+  `;
+
+  tip.classList.add("show");
+
+  moveSessionTip(event);
+
+}
+
+
+function moveSessionTip(event) {
+
+  const tip = document.getElementById("sessionTip");
+
+  if (!tip.classList.contains("show")) {
+    return;
+  }
+
+  const margin = 14;
+  const rect = tip.getBoundingClientRect();
+
+  let left = event.clientX + margin;
+  let top = event.clientY + margin;
+
+  if (left + rect.width > window.innerWidth - 8) {
+    left = event.clientX - rect.width - margin;
+  }
+
+  if (top + rect.height > window.innerHeight - 8) {
+    top = event.clientY - rect.height - margin;
+  }
+
+  tip.style.left = Math.max(8, left) + "px";
+  tip.style.top = Math.max(8, top) + "px";
+
+}
+
+
+function hideSessionTip() {
+
+  document.getElementById("sessionTip").classList.remove("show");
+
+}
+
+
+/*
+ * Excel 다운로드
+ */
+function downloadExcel() {
+
+  if (!currentRows.length) {
+
+    alert(
+      "먼저 상영시간표를 조회하세요."
+    );
+
+    return;
+  }
+
+
+  /*
+   * JSON → worksheet
+   */
+  const worksheet =
+    XLSX.utils.json_to_sheet(
+      currentRows,
+      {
+        header: [
+          "영화명",
+          "날짜",
+          "상영관",
+          "상영시간 (시작~끝)"
+        ]
+      }
+    );
+
+
+  /*
+   * 컬럼 폭 설정
+   */
+  worksheet["!cols"] = [
+
+    {
+      wch: 38
+    },
+
+    {
+      wch: 14
+    },
+
+    {
+      wch: 30
+    },
+
+    {
+      wch: 26
+    }
+
+  ];
+
+
+  /*
+   * 자동 필터
+   */
+  if (currentRows.length > 0) {
+
+    worksheet["!autofilter"] = {
+
+      ref:
+        `A1:D${currentRows.length + 1}`
+
+    };
+
+  }
+
+
+  /*
+   * Workbook 생성
+   */
+  const workbook =
+    XLSX.utils.book_new();
+
+
+  XLSX.utils.book_append_sheet(
+    workbook,
+    worksheet,
+    "상영시간표"
+  );
+
+
+  /*
+   * 파일명
+   */
+  const selectedDate =
+    document
+      .getElementById("date")
+      .value
+      .replaceAll("-", "");
+
+
+  const safeSiteName =
+    currentSiteName
+      .replace(
+        /[\\/:*?"<>|]/g,
+        "_"
+      );
+
+
+  const fileName =
+    `${safeSiteName}_${selectedDate}_상영시간표.xlsx`;
+
+
+  /*
+   * 다운로드
+   */
+  XLSX.writeFile(
+    workbook,
+    fileName
+  );
+
+}
+
+
+/* ==================================================================
+ * 영화 상세정보 팝업
+ *
+ *   TMDB  - 포스터 / 감독 / 출연진 / 줄거리 / 개봉일 / 러닝타임
+ *   OMDb  - IMDb 평점 / 전문가 평점(Metacritic, Rotten Tomatoes)
+ *   네이버 - 실관람객(관객) 평점 / 관객 한줄평
+ * ================================================================== */
+
+function openMovieModal(title) {
+
+  const modal = document.getElementById("movieModal");
+  const body = document.getElementById("movieModalBody");
+
+  modal.classList.add("open");
+  document.body.style.overflow = "hidden";
+
+  body.innerHTML = `
+    <div class="modal-loading">
+      <h3>${escapeHtml(title)}</h3>
+      <p>영화 정보를 불러오는 중입니다...</p>
+    </div>
+  `;
+
+  fetch("/api/movie?title=" + encodeURIComponent(title))
+    .then(response => response.json().then(json => {
+
+      if (!response.ok) {
+        throw new Error(json.error || ("HTTP " + response.status));
+      }
+
+      return json;
+
+    }))
+    .then(data => {
+      body.innerHTML = renderMovieDetail(title, data);
+    })
+    .catch(error => {
+      body.innerHTML = `
+        <div class="modal-loading">
+          <h3>${escapeHtml(title)}</h3>
+          <p style="color:#a00;">
+            정보를 불러오지 못했습니다: ${escapeHtml(error.message)}
+          </p>
+        </div>
+      `;
+    });
+
+}
+
+
+function closeMovieModal() {
+
+  document.getElementById("movieModal").classList.remove("open");
+  document.body.style.overflow = "";
+
+}
+
+
+function onBackdropClick(event) {
+
+  // 바깥 여백을 클릭한 경우에만 닫는다.
+  if (event.target.id === "movieModal") {
+    closeMovieModal();
+  }
+
+}
+
+
+/*
+ * 팝업 본문 HTML 생성
+ */
+function renderMovieDetail(rawTitle, data) {
+
+  const tmdb = data.tmdb || {};
+  const omdb = data.omdb || {};
+  const naver = data.naver || {};
+
+  const heading = tmdb.available ? tmdb.title : rawTitle;
+
+  /* ----- 기본 정보 ----- */
+  let metaHtml = "";
+
+  if (tmdb.available) {
+
+    const runtime = tmdb.runtime
+      ? `${Math.floor(tmdb.runtime / 60)}시간 ${tmdb.runtime % 60}분 (${tmdb.runtime}분)`
+      : "-";
+
+    metaHtml = `
+      ${tmdb.originalTitle && tmdb.originalTitle !== tmdb.title
+        ? `<div class="modal-original">${escapeHtml(tmdb.originalTitle)}</div>`
+        : ""}
+
+      ${tmdb.genres.length
+        ? `<div class="meta-line">${tmdb.genres
+            .map(g => `<span class="genre-tag">${escapeHtml(g)}</span>`)
+            .join("")}</div>`
+        : ""}
+
+      <div class="meta-line">
+        <b>감독</b> ${tmdb.directors.length ? escapeHtml(tmdb.directors.join(", ")) : "-"}
+      </div>
+      <div class="meta-line"><b>개봉</b> ${escapeHtml(tmdb.releaseDate || "-")}</div>
+      <div class="meta-line"><b>러닝타임</b> ${runtime}</div>
+      ${tmdb.tagline
+        ? `<div class="meta-line" style="color:#777;font-style:italic;">
+             "${escapeHtml(tmdb.tagline)}"
+           </div>`
+        : ""}
+    `;
+
+  } else {
+
+    metaHtml = `
+      <div class="source-fail">
+        기본 정보를 가져오지 못했습니다.
+        ${escapeHtml(tmdb.reason || "")}
+      </div>
+    `;
+
+  }
+
+  const posterHtml = tmdb.poster
+    ? `<img class="modal-poster" src="${escapeAttr(tmdb.poster)}"
+            alt="${escapeAttr(heading)} 포스터" />`
+    : `<div class="modal-poster" style="height:280px;display:flex;
+            align-items:center;justify-content:center;color:#bbb;">
+         포스터 없음
+       </div>`;
+
+  /* ----- 평점 카드 ----- */
+  const cards = [];
+
+  if (naver.available && naver.audienceScore) {
+    cards.push(`
+      <div class="rating-card audience">
+        <div class="label">
+          ${escapeHtml(naver.audienceScoreType || "관객")} 평점 (네이버)
+        </div>
+        <div class="score">${escapeHtml(naver.audienceScore)}</div>
+        <div class="sub">
+          10점 만점${naver.participants ? " · " + escapeHtml(naver.participants) + "명" : ""}
+        </div>
+      </div>
+    `);
+  }
+
+  if (naver.available && naver.criticScore) {
+    cards.push(`
+      <div class="rating-card critic">
+        <div class="label">전문가 평점 (네이버)</div>
+        <div class="score">${escapeHtml(naver.criticScore)}</div>
+        <div class="sub">10점 만점 · 평론가 ${naver.criticCount}명</div>
+      </div>
+    `);
+  }
+
+  if (omdb.available && omdb.imdbRating) {
+    cards.push(`
+      <div class="rating-card imdb">
+        <div class="label">IMDb</div>
+        <div class="score">${escapeHtml(omdb.imdbRating)}</div>
+        <div class="sub">
+          10점 만점${omdb.imdbVotes ? " · " + escapeHtml(omdb.imdbVotes) : ""}
+        </div>
+      </div>
+    `);
+  }
+
+  if (omdb.available && omdb.metascore) {
+    cards.push(`
+      <div class="rating-card meta">
+        <div class="label">전문가 (Metacritic)</div>
+        <div class="score">${escapeHtml(omdb.metascore)}</div>
+        <div class="sub">100점 만점</div>
+      </div>
+    `);
+  }
+
+  if (omdb.available && omdb.rottenTomatoes) {
+    cards.push(`
+      <div class="rating-card tomato">
+        <div class="label">전문가 (Rotten Tomatoes)</div>
+        <div class="score">${escapeHtml(omdb.rottenTomatoes)}</div>
+        <div class="sub">토마토미터</div>
+      </div>
+    `);
+  }
+
+  if (tmdb.available && tmdb.voteAverage) {
+    cards.push(`
+      <div class="rating-card">
+        <div class="label">TMDB</div>
+        <div class="score">${Number(tmdb.voteAverage).toFixed(1)}</div>
+        <div class="sub">10점 만점 · ${Number(tmdb.voteCount || 0).toLocaleString()}명</div>
+      </div>
+    `);
+  }
+
+  const ratingHtml = cards.length
+    ? `<div class="rating-row">${cards.join("")}</div>`
+    : `<div class="source-fail">평점 정보를 찾지 못했습니다.</div>`;
+
+  const genderHtml =
+    naver.available && naver.maleScore
+      ? `<div class="meta-line" style="color:#777;">
+           네이버 성별 평점 · 남 ${escapeHtml(naver.maleScore)}
+           / 여 ${escapeHtml(naver.femaleScore)}
+         </div>`
+      : "";
+
+  /* ----- 출연진 ----- */
+  const castHtml =
+    tmdb.available && tmdb.cast.length
+      ? `<h3 class="section-title">출연진</h3>
+         <div class="cast-list">
+           ${tmdb.cast.map(person => `
+             <div class="cast-item">
+               ${person.profile
+                 ? `<img src="${escapeAttr(person.profile)}"
+                         alt="${escapeAttr(person.name)}" />`
+                 : `<div class="no-photo">사진 없음</div>`}
+               <div class="nm">${escapeHtml(person.name)}</div>
+               <div class="ch">${escapeHtml(person.character)}</div>
+             </div>
+           `).join("")}
+         </div>`
+      : "";
+
+  /* ----- 줄거리 ----- */
+  const overviewHtml =
+    tmdb.available && tmdb.overview
+      ? `<h3 class="section-title">줄거리</h3>
+         <div class="overview">${escapeHtml(tmdb.overview)}</div>`
+      : "";
+
+  /* ----- 전문가(평론가) 의견 ----- */
+  const criticHtml =
+    naver.available && naver.critics && naver.critics.length
+      ? `<h3 class="section-title">전문가 평 (네이버 평론가)</h3>
+         ${naver.critics.map(critic => `
+           <div class="review critic-review">
+             <span class="score-badge critic-badge">${escapeHtml(critic.score)}</span>
+             ${escapeHtml(critic.comment)}
+             <div class="who">
+               ${escapeHtml(critic.name)} · ${escapeHtml(critic.date)}
+             </div>
+           </div>
+         `).join("")}`
+      : "";
+
+  /* ----- 관객 한줄평 ----- */
+  const reviewHtml =
+    naver.available && naver.reviews.length
+      ? `<h3 class="section-title">
+           ${escapeHtml(naver.audienceScoreType || "관객")} 한줄평 (네이버)
+         </h3>
+         ${naver.reviews.map(review => `
+           <div class="review">
+             <span class="score-badge">${escapeHtml(review.score)}</span>
+             ${escapeHtml(review.content)}
+             <div class="who">
+               ${escapeHtml(review.author)}
+               ${review.date ? " · " + escapeHtml(review.date) : ""}
+               · 공감 ${escapeHtml(review.likes)}
+             </div>
+           </div>
+         `).join("")}`
+      : "";
+
+  /* ----- 안내 문구 ----- */
+  const notes = [];
+
+  if (!omdb.available) {
+    notes.push("IMDb·해외 평점: " + escapeHtml(omdb.reason || "조회 실패"));
+  } else if (!omdb.metascore && !omdb.rottenTomatoes) {
+    notes.push("이 영화는 해외 전문가 평점(Metacritic·Rotten Tomatoes) 데이터가 없습니다.");
+  }
+
+  if (!naver.available) {
+    notes.push("네이버 평점: " + escapeHtml(naver.reason || "조회 실패"));
+  } else if (!naver.critics || !naver.critics.length) {
+    notes.push("이 영화는 네이버 평론가 평점이 등록되어 있지 않습니다.");
+  }
+
+  const linkParts = [];
+
+  if (omdb.available && omdb.imdbUrl) {
+    linkParts.push(`<a href="${escapeAttr(omdb.imdbUrl)}" target="_blank"
+                       rel="noopener noreferrer">IMDb에서 보기</a>`);
+  }
+
+  if (naver.available && naver.searchUrl) {
+    linkParts.push(`<a href="${escapeAttr(naver.searchUrl)}" target="_blank"
+                       rel="noopener noreferrer">네이버에서 보기</a>`);
+  }
+
+  return `
+    <div class="modal-body">
+
+      <div class="modal-head">
+        ${posterHtml}
+        <div class="modal-meta">
+          <h2>${escapeHtml(heading)}</h2>
+          ${metaHtml}
+          ${genderHtml}
+        </div>
+      </div>
+
+      ${ratingHtml}
+      ${overviewHtml}
+      ${castHtml}
+      ${criticHtml}
+      ${reviewHtml}
+
+      <div class="modal-note">
+        ${linkParts.length ? linkParts.join(" · ") + "<br>" : ""}
+        출처: TMDB(기본정보) · 네이버(관객·전문가 평점) ·
+        OMDb(IMDb·Metacritic·Rotten Tomatoes)
+        ${notes.length ? "<br>" + notes.join("<br>") : ""}
+        ${data.query && data.query.raw !== data.query.cleaned
+          ? `<br>검색어: "${escapeHtml(data.query.raw)}" → "${escapeHtml(data.query.cleaned)}"`
+          : ""}
+      </div>
+
+    </div>
+  `;
+
+}
+
+
+/*
+ * ESC 키로 팝업 닫기
+ */
+window.addEventListener("keydown", event => {
+
+  if (event.key === "Escape") {
+    closeMovieModal();
+    closeFilterModal();
+    hideSessionTip();
+  }
+
+});
+
+
+/*
+ * HTML 속성값 escape (작은따옴표 포함)
+ */
+function escapeAttr(value) {
+
+  return escapeHtml(value);
+
+}
+
+
+/*
+ * HTML escape
+ */
+function escapeHtml(value) {
+
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+
+}
+
+
+/*
+ * 초기화
+ *
+ *  - 지역/극장 목록 생성 (기본값: 경기 - CGV 오리)
+ *  - 오늘 날짜 기본 설정
+ */
+window.addEventListener(
+  "DOMContentLoaded",
+  () => {
+
+    initRegionSelect();
+
+    document
+      .getElementById("region")
+      .value = CGV_DEFAULT_REGION;
+
+    fillTheaterSelect(
+      CGV_DEFAULT_REGION,
+      CGV_DEFAULT_SITE_NO
+    );
+
+
+    const today =
+      new Date();
+
+    const yyyy =
+      today.getFullYear();
+
+    const mm =
+      String(
+        today.getMonth() + 1
+      ).padStart(2, "0");
+
+    const dd =
+      String(
+        today.getDate()
+      ).padStart(2, "0");
+
+
+    document
+      .getElementById("date")
+      .value =
+        `${yyyy}-${mm}-${dd}`;
+
+  }
+);
+
+</script>
+
+</body>
+</html>
