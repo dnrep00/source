@@ -208,6 +208,13 @@ app.get("/api/schedule", async (req, res) => {
     clearTimeout(timeoutId);
 
     if (!response.ok) {
+      const bodyText = await response.text().catch(() => "(본문 읽기 실패)");
+      console.error("===== CGV 응답 오류 상세 =====");
+      console.error("status:", response.status);
+      console.error("headers:", JSON.stringify([...response.headers.entries()]));
+      console.error("body (앞 500자):", bodyText.slice(0, 500));
+      console.error("==============================");
+
       return res.status(response.status).json({
         error: `CGV 서버 응답 오류 (HTTP ${response.status})`
       });
