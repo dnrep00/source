@@ -65,7 +65,19 @@ function loadEnvFile() {
     }
 
     const key = trimmed.slice(0, eq).trim();
-    const value = trimmed.slice(eq + 1).trim();
+
+    /*
+     * 값을 감싼 따옴표는 벗긴다. TMDB_API_KEY="abc" 처럼 적는 것이
+     * .env에서는 흔한데, 그대로 두면 따옴표까지 키에 붙어 모든 호출이
+     * 401로 떨어진다 — 원인을 찾기 어려운 실패라 여기서 막는다.
+     */
+    let value = trimmed.slice(eq + 1).trim();
+
+    if (value.length >= 2 &&
+        ((value.startsWith('"') && value.endsWith('"')) ||
+         (value.startsWith("'") && value.endsWith("'")))) {
+      value = value.slice(1, -1);
+    }
 
     if (!process.env[key]) {
       process.env[key] = value;
@@ -112,11 +124,24 @@ const BROWSER_UA =
  * 공통 fetch 헬퍼.
  * ALLOW_INSECURE_TLS=true 인 경우에만 인증서 검증을 생략하는
  * dispatcher를 사용한다.
+ *
+ * 타임아웃은 본문을 다 읽을 때까지 걸려 있다. 헤더가 도착한 시점에 타이머를
+ * 끄면 그 뒤의 .json()/.text()는 무제한이 되는데, 실제로 늘어지는 쪽은 본문
+ * 이다 — 특히 네이버 검색 HTML 조회.
+ *
+ * Response 그대로가 아니라 ok/status/json/text만 가진 객체를 돌려준다.
+ * 호출부가 쓰는 것이 그 넷뿐이라 이 정도로 충분하다.
  */
 async function httpFetch(url, { headers = {}, timeout = 10000 } = {}) {
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+  // 본문을 읽지 않고 끝나는 호출(!ok로 바로 빠지는 경우)이 남긴 타이머가
+  // 프로세스를 붙잡지 않도록 한다. 이미 끝난 요청에 대한 abort는 무해하다.
+  if (typeof timeoutId.unref === "function") {
+    timeoutId.unref();
+  }
 
   const options = {
     method: "GET",
@@ -128,17 +153,30 @@ async function httpFetch(url, { headers = {}, timeout = 10000 } = {}) {
     options.dispatcher = insecureAgent;
   }
 
+  let response;
+
   try {
 
-    return insecureAgent
+    response = insecureAgent
       ? await undiciFetch(url, options)
       : await fetch(url, options);
 
-  } finally {
+  } catch (error) {
 
     clearTimeout(timeoutId);
+    throw error;
 
   }
+
+  const readBody = promise =>
+    promise.finally(() => clearTimeout(timeoutId));
+
+  return {
+    ok: response.ok,
+    status: response.status,
+    json: () => readBody(response.json()),
+    text: () => readBody(response.text())
+  };
 
 }
 
@@ -179,42 +217,15 @@ app.get("/api/schedule", async (req, res) => {
 
   try {
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
-
-    const fetchOptions = {
-      method: "GET",
+    const response = await httpFetch(cgvUrl, {
       headers: {
         "Accept": "application/json",
-        // 일부 API는 브라우저 UA / Referer 확인을 하므로 함께 전달
-        "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) " +
-          "AppleWebKit/537.36 (KHTML, like Gecko) " +
-          "Chrome/124.0.0.0 Safari/537.36",
+        // CGV는 브라우저 Referer를 확인하므로 함께 보낸다. (UA는 httpFetch가 붙인다)
         "Referer": "https://cgv.co.kr/"
-      },
-      signal: controller.signal
-    };
-
-    // ALLOW_INSECURE_TLS=true인 경우에만 커스텀 dispatcher(인증서 검증 생략) 사용
-    if (insecureAgent) {
-      fetchOptions.dispatcher = insecureAgent;
-    }
-
-    const response = insecureAgent
-      ? await undiciFetch(cgvUrl, fetchOptions)
-      : await fetch(cgvUrl, fetchOptions);
-
-    clearTimeout(timeoutId);
+      }
+    });
 
     if (!response.ok) {
-      const bodyText = await response.text().catch(() => "(본문 읽기 실패)");
-      console.error("===== CGV 응답 오류 상세 =====");
-      console.error("status:", response.status);
-      console.error("headers:", JSON.stringify([...response.headers.entries()]));
-      console.error("body (앞 500자):", bodyText.slice(0, 500));
-      console.error("==============================");
-
       return res.status(response.status).json({
         error: `CGV 서버 응답 오류 (HTTP ${response.status})`
       });
@@ -269,6 +280,27 @@ const MOVIE_CACHE_TTL = 6 * 60 * 60 * 1000;   // 6시간 (정상 조회)
  * 계속 "정보 없음"으로 보이기 때문이다.
  */
 const PARTIAL_CACHE_TTL = 3 * 60 * 1000;      // 3분 (일부 실패)
+
+
+/*
+ * 만료된 항목을 실제로 지운다.
+ *
+ * TTL을 넘긴 엔트리도 Map에는 그대로 남아, 같은 제목을 다시 조회하지 않는 한
+ * 영영 회수되지 않았다. 조회한 영화 수만큼 프로세스 수명 내내 쌓인다.
+ */
+function pruneMovieCache() {
+
+  const now = Date.now();
+
+  for (const [key, entry] of movieCache) {
+
+    if (now - entry.at >= entry.ttl) {
+      movieCache.delete(key);
+    }
+
+  }
+
+}
 
 
 /*
@@ -609,132 +641,57 @@ async function fetchOmdb(imdbId) {
 
 }
 
-
-/*
- * HTML 태그를 걷어내고 한 줄 텍스트로 만든다.
- */
-function toPlainText(html) {
-
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, " ")
-    .replace(/<style[\s\S]*?<\/style>/gi, " ")
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/\s+/g, " ")
-    .trim();
-
-}
-
-
-/*
- * 네이버 영화 패널이 내부적으로 쓰는 API를 호출한다.
- * 응답은 { "html": "..." } 형태이므로 html 문자열만 꺼내온다.
- */
-async function fetchNaverPanel(url) {
-
-  const response = await httpFetch(url, {
-    headers: {
-      "Accept-Language": "ko-KR,ko;q=0.9",
-      "Referer": "https://search.naver.com/"
-    }
-  });
-
-  if (!response.ok) {
-    return null;
-  }
-
-  const json = await response.json().catch(() => null);
-
-  return json && json.html ? toPlainText(json.html) : null;
-
-}
-
-
-/*
- * 네이버 평론가(전문가) 평점과 코멘트
+/* ------------------------------------------------------------------
+ * 네이버 영화 평점 / 관람평
  *
- *   "이름 박평식 작성일 2024.02.21 별점(10점 만점 중) 6.0 난폭, 변덕, 애국의 삽질"
- */
-async function fetchNaverCritics(movieCode) {
+ * 네이버는 영화 정보용 공식 API를 제공하지 않는다(2023년 서비스 종료).
+ * 예전에는 검색 결과 HTML과 nqapirender.nhn 패널 API를 정규식으로 긁었는데,
+ * 그 경로는 2026년 개편으로 사라졌다 - 지금은 검색 페이지가 콘텐츠 ID만 들고
+ * 있고 실제 데이터는 아래 JSON API에서 클라이언트가 따로 받아간다.
+ *
+ *   1. 검색 HTML에서 csearch/contents/{contentId} 를 뽑는다.
+ *   2. api-gw.entertain.naver.com 에서 ent.movie.full.info 와
+ *      ent.movie.standalone.rating 모듈을 한 번에 받는다.
+ *
+ * 두 모듈을 같이 받는 이유:
+ *   - full.info        실관람객/네티즌 평점(ratingBlock)과 관람평(review)
+ *   - standalone.rating 평론가 평점. 평론가 이름과 작성일이 여기에만 있고,
+ *                      건수도 full.info 쪽(4건)보다 많다(11건).
+ *
+ * 비공식 경로인 것은 예전과 같으므로 네이버가 또 바꾸면 멈춘다. 그때는
+ * available:false로만 응답하고 TMDB/OMDb 결과는 그대로 보여준다.
+ * ------------------------------------------------------------------ */
 
-  const text = await fetchNaverPanel(
-    "https://ts-proxy.naver.com/content/nqapirender.nhn" +
-    "?where=nexearch&pkid=68&fileKey=movieKBExpertPointAPI&u1=" + movieCode
-  );
+const NAVER_API_BASE = "https://api-gw.entertain.naver.com/csearch/contents";
 
-  if (!text) {
-    return [];
-  }
+// 관람평(실관람객/네티즌 한줄평)은 위와 다른 게이트웨이에서 온다.
+const NAVER_POINT_API = "https://proxy-gw.entertain.naver.com/movie/api";
 
-  const pattern =
-    /이름\s+(\S+(?:\s\S+)?)\s+작성일\s+([\d.]+)\s+별점\(10점\s*만점\s*중\)\s+([\d.]+)\s+(.+?)(?=\s+이름\s+\S+\s+작성일|\s*$)/g;
+// 영화 콘텐츠를 가리키는 네이버 내부 분류값. 검색 페이지가 항상 이 값을 쓴다.
+const NAVER_MOVIE_PKID = "68";
 
-  return [...text.matchAll(pattern)].map(match => ({
-    name: match[1],
-    date: match[2],
-    score: match[3],
-    comment: match[4].trim()
-  }));
-
-}
+// 팝업에 넣을 관람평 수. API는 200건까지도 주지만 한 화면에 들어갈 만큼만 받는다.
+const NAVER_REVIEW_COUNT = 5;
 
 
 /*
- * 네이버 관객 한줄평
+ * 검색 결과에서 그 영화를 가리키는 두 개의 ID를 찾는다.
  *
- * 검색 결과 HTML이 아니라 평점 패널 API에서 가져온다.
- * isRealAudience=true면 실관람객, false면 네티즌 평가를 조회한다.
+ * 검색어에 "평점"을 붙여야 영화 패널이 뜨고, 패널이 떠야 두 ID가 HTML 안에
+ * 박힌다. 영화가 아니거나(드라마·시리즈) 네이버가 패널을 띄우지 않으면
+ * 둘 다 null이 나온다.
+ *
+ *   contentId  검색 콘텐츠 ID. 평점·평론가 조회(csearch)에 쓴다.
+ *   movieCode  네이버 영화 코드. 관람평 조회에 쓴다. 두 API가 서로 다른
+ *              ID 체계를 쓰기 때문에 둘 다 필요하다.
  */
-async function fetchNaverReviews(movieCode, isRealAudience) {
+async function fetchNaverIds(title) {
 
-  const text = await fetchNaverPanel(
-    "https://ts-proxy.naver.com/dcontent/nqapirender.nhn" +
-    "?where=nexearch&pkid=68&fileKey=movieKBPointAPI&u1=" + movieCode +
-    "&u5=" + (isRealAudience ? "true" : "")
-  );
-
-  if (!text) {
-    return [];
-  }
-
-  const pattern =
-    /별점\(10점\s*만점\s*중\)\s*(\d{1,2})\s+(.+?)\s*(?:펼쳐보기\s*)?작성자\s+(\S+)\s+작성일\s+([\d.]+)[^\d]*[\d:]*\s*신고여부\s*신고\s*([\d,]+)/g;
-
-  return [...text.matchAll(pattern)].slice(0, 5).map(match => ({
-    score: match[1],
-    // 실관람객 항목은 본문 앞에 "관람객" 뱃지 문구가 붙는다.
-    content: match[2].replace(/^관람객\s*/, "").trim(),
-    author: match[3],
-    date: match[4],
-    likes: match[5]
-  }));
-
-}
-
-
-/*
- * 네이버에서 관객 평점 / 관객 한줄평 / 평론가 평점을 가져온다.
- *
- * 네이버는 영화 정보용 공식 API를 제공하지 않으므로(2023년 서비스 종료)
- * 통합검색 결과와 검색 화면이 내부적으로 호출하는 패널 API를 이용한다.
- * 네이버가 화면 구조를 바꾸면 동작하지 않을 수 있으며, 그 경우
- * available:false로 응답한다.
- *
- * 참고: 검색어에 "평점"을 붙여야 영화 패널이 렌더링되고,
- *       패널 안에 영화 코드(mcode)가 들어있다.
- */
-async function fetchNaver(title) {
-
-  const url =
+  const searchUrl =
     "https://search.naver.com/search.naver?query=" +
     encodeURIComponent("영화 " + title + " 평점");
 
-  const response = await httpFetch(url, {
+  const response = await httpFetch(searchUrl, {
     headers: { "Accept-Language": "ko-KR,ko;q=0.9" }
   });
 
@@ -743,79 +700,153 @@ async function fetchNaver(title) {
   }
 
   const html = await response.text();
-  const text = toPlainText(html);
 
-  /*
-   * 평점 라벨은 영화에 따라 다르다.
-   *   관객이 많은 영화 → "실관람객 평점 9.13 10 17,074명 참여"
-   *   관객이 적은 영화 → "네티즌 평점 6.43 10 7명 참여"
-   */
-  const scoreMatch = text.match(
-    /(실관람객|네티즌)\s*평점[^0-9]{0,40}(\d{1,2}\.\d{1,2})\s*(?:10)?\s*([\d,]+)\s*명\s*참여/
-  );
+  const contentId = (html.match(/csearch\/contents\/(\d+)/) || [])[1] || null;
+  const movieCode = (html.match(/"movieCode":"?(\d+)"?/) || [])[1] || null;
 
-  const looseScore = scoreMatch
-    ? null
-    : text.match(/(실관람객|네티즌)\s*평점[^0-9]{0,40}(\d{1,2}\.\d{1,2})/);
+  return { contentId, movieCode, searchUrl };
+}
 
-  const scoreType = scoreMatch
-    ? scoreMatch[1]
-    : (looseScore ? looseScore[1] : null);
 
-  const score = scoreMatch
-    ? scoreMatch[2]
-    : (looseScore ? looseScore[2] : null);
+/*
+ * 관람평 목록.
+ *
+ * Reproduces: GET /movie/api/netizen-point-list — 검색 화면의 관람평 탭이
+ * 부르는 API. onlyActualPoint가 실관람객(Y)과 네티즌(N)을 가른다.
+ *
+ * 관람평은 평점에 딸린 부가 정보라, 이 호출이 실패해도 예외를 던지지 않고
+ * 빈 배열을 돌려준다 — 평점까지 같이 사라지게 둘 이유가 없다.
+ */
+async function fetchNaverPointList(movieCode, onlyActualPoint) {
 
-  const participants = scoreMatch ? scoreMatch[3] : null;
+  const url =
+    NAVER_POINT_API + "/netizen-point-list?" +
+    new URLSearchParams({
+      movieCode: String(movieCode),
+      onlyActualPoint: String(onlyActualPoint),
+      order: "sympathyScore",              // 공감순. "newest"면 최신순
+      includeSpoiler: "false",
+      page: "1",
+      pageSize: String(NAVER_REVIEW_COUNT)
+    }).toString();
 
-  // 성별 평점 ("남자 9.19 여자 9.05")
-  const genderMatch = text.match(
-    /남자\s*(\d{1,2}\.\d{1,2})\s*여자\s*(\d{1,2}\.\d{1,2})/
-  );
+  const response = await httpFetch(url, {
+    headers: {
+      "Accept": "application/json",
+      "Referer": "https://search.naver.com/"
+    }
+  });
 
-  // 네이버 영화 코드 - 평론가/한줄평 API 호출에 필요
-  const codeMatch =
-    html.match(/fileKey=movieKB\w*PointAPI&(?:amp;)?u1=(\d+)/) ||
-    html.match(/mcode=(\d+)/);
-
-  const movieCode = codeMatch ? codeMatch[1] : null;
-
-  let reviews = [];
-  let critics = [];
-
-  if (movieCode) {
-
-    const settle = promise => promise.catch(() => []);
-
-    [reviews, critics] = await Promise.all([
-      settle(fetchNaverReviews(movieCode, scoreType !== "네티즌")),
-      settle(fetchNaverCritics(movieCode))
-    ]);
-
+  if (!response.ok) {
+    return [];
   }
 
-  /*
-   * 영화 코드를 못 찾았다면 영화 패널이 뜨지 않은 것이다.
-   * 이때 페이지 어딘가에서 우연히 걸린 평점은 다른 영화의 값일 수 있으므로
-   * (예: "스파이더맨-브랜드 뉴 데이" 검색 시 8.67 - 실제는 9.01)
-   * 신뢰할 수 없는 값으로 보고 버린다.
-   */
-  if (!movieCode) {
+  const json = await response.json();
+
+  if (json.resultCode && json.resultCode !== "SUCCESS") {
+    return [];
+  }
+
+  return (json.pointList || []).map(point => ({
+    score: String(point.point),
+    content: (point.ment || "").trim(),
+    author: point.userMaskId || "",
+    date: point.date || "",
+    likes: typeof point.sympathyCount === "number"
+      ? point.sympathyCount.toLocaleString("en-US")
+      : ""
+  }));
+}
+
+
+/*
+ * 평론가 평점 목록.
+ *
+ *   { reviewerName, writtenAt, rating, text } -> { name, date, score, comment }
+ */
+function toCritics(ratingInfo) {
+
+  const items = (ratingInfo && ratingInfo.critic && ratingInfo.critic.items) || [];
+
+  // writtenAt은 "20260731" 형태로 온다. 화면 표기에 맞춰 끊어준다.
+  const formatDate = value =>
+    /^\d{8}$/.test(value || "")
+      ? value.slice(0, 4) + "." + value.slice(4, 6) + "." + value.slice(6, 8)
+      : (value || "");
+
+  return items.map(item => ({
+    name: item.reviewerName || "",
+    date: formatDate(item.writtenAt),
+    score: String(item.rating),
+    comment: (item.text || "").trim()
+  }));
+}
+
+
+/*
+ * 네이버에서 실관람객/네티즌 평점과 관람평, 평론가 평점을 가져온다.
+ *
+ * 반환값의 audienceScore는 실관람객 평점이고, 실관람객 평점이 아직 없는
+ * 영화(개봉 직후 등)는 네티즌 평점으로 대체한다. 어느 쪽인지는
+ * audienceScoreType에 담아 화면에서 라벨로 쓴다.
+ */
+async function fetchNaver(title) {
+
+  const { contentId, movieCode, searchUrl } = await fetchNaverIds(title);
+
+  if (!contentId) {
     return {
       available: false,
       reason: "네이버에서 이 제목의 영화 정보를 찾지 못했습니다."
     };
   }
 
-  if (!score && !reviews.length && !critics.length) {
+  const apiUrl =
+    NAVER_API_BASE + "/" + contentId +
+    "?modules=ent.movie.full.info,ent.movie.standalone.rating" +
+    "&pkid=" + NAVER_MOVIE_PKID;
+
+  const response = await httpFetch(apiUrl, {
+    headers: {
+      "Accept": "application/json",
+      "Referer": "https://search.naver.com/"
+    }
+  });
+
+  if (!response.ok) {
+    throw new Error("네이버 영화 API 실패 (HTTP " + response.status + ")");
+  }
+
+  const pool = ((await response.json()).result || {}).dataPool || {};
+
+  const ratings = (pool.ratingBlock && pool.ratingBlock.ratings) || [];
+  const actual = ratings.find(rating => rating.type === "actual");
+  const netizen = ratings.find(rating => rating.type === "netizen");
+
+  const critics = toCritics(pool.ratingInfo);
+
+  /*
+   * 관람평은 실관람객을 먼저 본다. 아직 아무도 남기지 않은 영화(개봉 직후
+   * 등)만 네티즌 관람평으로 대신하므로, 두 번째 호출은 그때만 일어난다.
+   */
+  let reviews = movieCode ? await fetchNaverPointList(movieCode, true) : [];
+  let reviewType = "실관람객";
+
+  if (!reviews.length && movieCode) {
+    reviews = await fetchNaverPointList(movieCode, false);
+    reviewType = "네티즌";
+  }
+
+  const primary = actual || netizen;
+
+  if (!primary && !reviews.length && !critics.length) {
     return {
       available: false,
-      movieCode,
-      reason: "네이버 검색 결과에서 영화 정보를 찾지 못했습니다."
+      movieCode: contentId,
+      reason: "네이버에 이 영화의 평점이 아직 등록되지 않았습니다."
     };
   }
 
-  // 평론가 평점 평균
   const criticAverage = critics.length
     ? (
         critics.reduce((sum, critic) => sum + parseFloat(critic.score), 0) /
@@ -825,17 +856,18 @@ async function fetchNaver(title) {
 
   return {
     available: true,
-    movieCode,
-    audienceScore: score,
-    audienceScoreType: scoreType,      // "실관람객" 또는 "네티즌"
-    participants,
-    maleScore: genderMatch ? genderMatch[1] : null,
-    femaleScore: genderMatch ? genderMatch[2] : null,
+    movieCode: contentId,
+    audienceScore: primary ? String(primary.score) : null,
+    audienceScoreType: actual ? "실관람객" : (netizen ? "네티즌" : null),
+    participants: primary ? primary.joinCount.toLocaleString("en-US") : null,
+    netizenScore: netizen ? String(netizen.score) : null,
+    netizenParticipants: netizen ? netizen.joinCount.toLocaleString("en-US") : null,
+    reviewType: reviews.length ? reviewType : null,
     criticScore: criticAverage,
     criticCount: critics.length,
     critics,
     reviews,
-    searchUrl: url
+    searchUrl
   };
 
 }
@@ -883,7 +915,7 @@ app.get("/api/movie", async (req, res) => {
      *   CGV    "스파이더맨-브랜드 뉴 데이"
      *   네이버  "스파이더맨: 브랜드 뉴 데이"
      *
-     * 이때 mcode를 못 얻어 평론가 평점과 한줄평이 통째로 빠지므로,
+     * 이때 콘텐츠 ID를 못 얻어 평점과 관람평이 통째로 빠지므로,
      * TMDB가 찾아낸 정식 제목으로 한 번 더 조회한다.
      */
     if (
@@ -914,6 +946,8 @@ app.get("/api/movie", async (req, res) => {
     // 네이버 영화 패널까지 정상적으로 찾은 경우에만 오래 캐시한다.
     const complete =
       tmdb && tmdb.available && naver && naver.available && !!naver.movieCode;
+
+    pruneMovieCache();
 
     movieCache.set(cacheKey, {
       at: Date.now(),
