@@ -1,0 +1,9 @@
+# 영화 정보 캐시 파일(*.json). 웹에서 직접 열 필요가 없다.
+# .htaccess 가 무시되는 서버여도 공개 영화 정보뿐이라 노출돼도 문제는 없다.
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+</IfModule>
